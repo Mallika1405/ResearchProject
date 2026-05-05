@@ -133,6 +133,11 @@ export const api = {
     request<HypothesesResponse>(`/hypotheses/${dataset_id}`),
   getStudyPlan: (plan_id: string) =>
     request<StudyDesignResponse>(`/study-plans/${plan_id}`),
+  suggestQuestions: (body: { dataset_ids: string[] }) =>
+    request<any>("/suggest-questions", { method: "POST", body: JSON.stringify(body) }),
+
+  quickExplore: (body: { dataset_id: string; question_type: string; outcome_col?: string | null; group_col?: string | null; predictor_col?: string | null }) =>
+    request<any>("/quick-explore", { method: "POST", body: JSON.stringify(body) }),
 };
 
 // ── Types ──────────────────────────────────────────────────────────────────

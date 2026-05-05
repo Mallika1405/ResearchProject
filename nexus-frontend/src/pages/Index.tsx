@@ -13,6 +13,7 @@ import { AdvancedModelsPanel } from "@/components/nexus/AdvancedModelsPanel";
 import { CohortBuilderPanel } from "@/components/nexus/CohortBuilderPanel";
 import { PeerReviewPanel } from "@/components/nexus/PeerReviewPanel";
 import { PowerPlanningPanel } from "@/components/nexus/PowerPlanningPanel";
+import {GuidedExplorePanel} from "@/components/nexus/GuidedExplorePanel"
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -409,7 +410,7 @@ function Workspace({ study, ds, onBack, onSwitchDs }: {
   ];
 
   const CONTENT: Record<WorkspaceTab, React.ReactNode> = {
-    overview:      <DatasetOverview ds={ds} study={study} />,
+    overview: <GuidedExplorePanel ds={ds} studyDatasetIds={study.datasets.map(d => d.dataset_id)} />,
     analyze:       <AnalysisPanel ds={ds} onResults={onResults} results={results} />,
     "study-design": <StudyDesignPanel ds={ds} />,
     hypotheses:    <HypothesisPanel ds={ds} />,

@@ -314,7 +314,16 @@ class ReplicationRequest(BaseModel):
     outcome: str
     predictors: List[str]
 
-
+class QuickExploreRequest(BaseModel):
+    dataset_id: str
+    question_type: str   # compare_groups | find_patterns | predict_outcome |
+                         # test_correlation | full_explore
+    outcome_col:   Optional[str] = None   # user-picked from dropdown
+    group_col:     Optional[str] = None   # user-picked from dropdown
+    predictor_col: Optional[str] = None   # user-picked from dropdown
+ 
+class SuggestQuestionsRequest(BaseModel):
+    dataset_ids: List[str]   # all datasets just uploaded in this batch
 # ══════════════════════════════════════════════════════════════════════════════
 #  HELPERS
 # ══════════════════════════════════════════════════════════════════════════════
@@ -337,7 +346,7 @@ def _col_stats(s: pd.Series, t: str) -> dict:
     nn = s.dropna()
     base = {"missing": int(s.isna().sum()), "missing_pct": round(s.isna().mean()*100, 2)}
     if t == "numeric":
-        nums = pd.to_numeric(nn, errors="coerce").dropna()
+        nums = pd.to_numeric(nn, errors="coerce").dropna().astype(float)
         if len(nums) == 0: return base
         return {**base, "mean": round(float(nums.mean()),4), "std": round(float(nums.std()),4),
                 "min": round(float(nums.min()),4), "max": round(float(nums.max()),4),
@@ -2018,3 +2027,301 @@ Critical rules:
 
     _log("Join Strategy Agent", f"Analyzed {len(req.dataset_ids)} datasets")
     return {"plan": plan, "datasets_analyzed": len(req.dataset_ids)}
+
+@app.post("/suggest-questions")
+async def suggest_questions(req: SuggestQuestionsRequest):
+    """
+    Called right after upload. Reads schemas of all uploaded datasets and
+    returns 5-8 plain-English questions the user might want to answer,
+    each tagged with question_type + pre-filled column suggestions.
+    """
+    if not req.dataset_ids:
+        raise HTTPException(400, "Provide at least one dataset_id")
+ 
+    schema_parts = []
+    for did in req.dataset_ids:
+        if did not in _DATASETS:
+            continue
+        meta  = _DATASETS[did]
+        df    = meta["df"]
+        s     = meta["schema"]
+        struct = meta["structure"]
+ 
+        col_lines = []
+        for c in s[:25]:
+            st = c["stats"]
+            if c["type"] == "numeric":
+                col_lines.append(
+                    f"  - {c['name']} (numeric): mean={st.get('mean')}, "
+                    f"range=[{st.get('min')}, {st.get('max')}]"
+                )
+            elif c["type"] == "categorical":
+                top = list(st.get("top_values", {}).keys())[:4]
+                col_lines.append(
+                    f"  - {c['name']} (categorical): {st.get('unique')} unique values, "
+                    f"e.g. {top}"
+                )
+            else:
+                col_lines.append(f"  - {c['name']} ({c['type']})")
+ 
+        schema_parts.append(
+            f'Dataset: "{meta["name"]}" ({len(df)} rows × {len(df.columns)} cols)\n'
+            f"Structure hint: {struct['recommended_model_family']}\n"
+            f"Columns:\n" + "\n".join(col_lines)
+        )
+ 
+    combined = "\n\n---\n\n".join(schema_parts)
+ 
+    prompt = f"""A researcher just uploaded these datasets:
+ 
+{combined}
+ 
+Generate 5-8 specific, plain-English questions they might want to answer with this data.
+Return ONLY a valid JSON array. Each item must have:
+- "question": plain English question (e.g. "Do protein levels differ between disease and healthy samples?")
+- "question_type": one of [compare_groups, find_patterns, predict_outcome, test_correlation, full_explore]
+- "category_label": human label for the group, one of ["Comparing groups", "Finding patterns", "Predicting outcomes", "Testing a relationship", "Explore everything"]
+- "suggested_outcome_col": exact column name that is the outcome/dependent variable (or null)
+- "suggested_group_col": exact column name to use as grouping variable (or null)
+- "suggested_predictor_col": exact column name to use as predictor (or null)
+- "why": one sentence explaining why this question is interesting for this specific data
+- "relevant_dataset_id": which dataset_id this question applies to
+- "beginner_friendly": true if this is a good starting point for someone unfamiliar with the data
+ 
+Rules:
+- Use actual column names from the datasets above
+- At least 2 questions should be beginner_friendly: true
+- Questions should be specific to THIS data, not generic
+- Do not repeat the same question_type more than 3 times
+- Return only valid JSON array, no markdown, no extra text"""
+ 
+    raw = await gemini(prompt, system=RESEARCH_SYSTEM)
+    try:
+        clean = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+        questions = json.loads(clean)
+    except Exception:
+        questions = [{"raw": raw, "error": "Could not parse — see raw"}]
+ 
+    _log("Suggest Questions Agent", f"{len(req.dataset_ids)} datasets",
+         f"Generated {len(questions) if isinstance(questions, list) else 0} questions")
+    return {
+        "dataset_ids": req.dataset_ids,
+        "questions": questions,
+        "n_questions": len(questions) if isinstance(questions, list) else 0,
+    }
+ 
+ 
+@app.post("/quick-explore")
+async def quick_explore(req: QuickExploreRequest):
+    """
+    Question-driven analysis. Runs ONLY the tests relevant to the chosen
+    question_type + columns, then returns results + a plain-English walkthrough.
+    """
+    df   = _get_df(req.dataset_id)
+    meta = _DATASETS[req.dataset_id]
+    struct = meta["structure"]
+    schema = meta["schema"]
+    num  = [c["name"] for c in schema if c["type"] == "numeric"]
+    cat  = [c["name"] for c in schema if c["type"] == "categorical"]
+ 
+    result: Dict = {
+        "dataset_id": req.dataset_id,
+        "question_type": req.question_type,
+        "analyses_run": [],
+        "findings": {},
+        "walkthrough": [],   # list of {step, title, plain_english, data}
+    }
+ 
+    # ── compare_groups ────────────────────────────────────────────────────────
+    if req.question_type == "compare_groups":
+        gc = req.group_col   or (cat[0] if cat else None)
+        vc = req.outcome_col or (num[0] if num else None)
+        if not gc or not vc:
+            raise HTTPException(400, "Need a group column and a value column for compare_groups")
+ 
+        anova_res = _anova(df, gc, vc)
+        result["findings"]["anova"] = anova_res
+        result["analyses_run"].append("ANOVA + Kruskal-Wallis + Tukey HSD")
+ 
+        # also t-test between top 2 groups
+        groups = {str(g): pd.to_numeric(grp[vc], errors="coerce").dropna().values
+                  for g, grp in df.groupby(gc) if len(grp) >= 5}
+        gkeys = list(groups.keys())
+        if len(gkeys) >= 2:
+            tt = _welch_ttest(groups[gkeys[0]], groups[gkeys[1]], gkeys[0], gkeys[1])
+            tt["power"] = _power_analysis_posthoc(groups[gkeys[0]], groups[gkeys[1]])
+            result["findings"]["ttest"] = tt
+            result["analyses_run"].append("Welch t-test + Mann-Whitney + power analysis")
+ 
+        prompt = f"""A researcher asked: "Do values of '{vc}' differ across groups in '{gc}'?"
+ 
+ANOVA result: F={anova_res.get('f_statistic')}, p={anova_res.get('p_value')}, η²={anova_res.get('eta_squared')} ({anova_res.get('effect_size')} effect)
+Groups: {json.dumps(anova_res.get('group_stats', {}), default=str)[:600]}
+Tukey HSD post-hoc: {json.dumps(anova_res.get('tukey_hsd', [])[:4], default=str)}
+ 
+Write a plain-English walkthrough in EXACTLY this JSON array format — 3 steps:
+[
+  {{"step": 1, "title": "What we tested", "text": "...one sentence describing the test in plain language..."}},
+  {{"step": 2, "title": "What we found", "text": "...the key finding in plain language, mention specific group names and direction of difference..."}},
+  {{"step": 3, "title": "What this means", "text": "...practical interpretation + caveats, no jargon..."}}
+]
+Return only valid JSON array."""
+ 
+    # ── find_patterns ─────────────────────────────────────────────────────────
+    elif req.question_type == "find_patterns":
+        cols = num[:8]
+        if len(cols) < 2:
+            raise HTTPException(400, "Need at least 2 numeric columns for pattern finding")
+ 
+        pca_res = _pca_full(df, cols, 3)
+        km_res  = _kmeans_full(df, cols[:6], 3)
+        result["findings"]["pca"] = pca_res
+        result["findings"]["clustering"] = km_res
+        result["analyses_run"].extend(["PCA (3 components)", "K-Means clustering (k=3)"])
+ 
+        prompt = f"""A researcher asked: "Are there hidden patterns or groupings in my data?"
+ 
+PCA: Top 3 components explain {pca_res['cumulative_variance'][-1]*100:.1f}% of variance.
+PC1 top loadings: {sorted(pca_res['loadings']['PC1'].items(), key=lambda x: -abs(x[1]))[:3]}
+Clustering (k=3): silhouette={km_res['silhouette_score']}, cluster sizes={[c['n'] for c in km_res['cluster_stats']]}
+Cluster means: {json.dumps([{{'cluster': c['cluster'], 'n': c['n'], 'means': dict(list(c['means'].items())[:3])}} for c in km_res['cluster_stats']], default=str)}
+ 
+Write a plain-English walkthrough in EXACTLY this JSON array format — 3 steps:
+[
+  {{"step": 1, "title": "What we tested", "text": "..."}},
+  {{"step": 2, "title": "What we found", "text": "...mention actual cluster sizes, what PC1 captures..."}},
+  {{"step": 3, "title": "What this means", "text": "...practical interpretation + what to do next..."}}
+]
+Return only valid JSON array."""
+ 
+    # ── predict_outcome ───────────────────────────────────────────────────────
+    elif req.question_type == "predict_outcome":
+        vc   = req.outcome_col or (num[0] if num else None)
+        if not vc:
+            raise HTTPException(400, "Need an outcome column for predict_outcome")
+        feats = [c for c in num if c != vc][:6]
+        if not feats:
+            raise HTTPException(400, "Need at least 1 predictor column")
+ 
+        rf_res = _rf_importance(df, [vc] + feats)
+        result["findings"]["feature_importance"] = rf_res
+        result["analyses_run"].append("Random Forest + permutation importance (5-fold CV)")
+ 
+        # also top correlation
+        corr_res = _pearson_matrix(df, [vc] + feats[:4])
+        result["findings"]["correlations"] = corr_res
+        result["analyses_run"].append("Pearson + Spearman correlations")
+ 
+        prompt = f"""A researcher asked: "Which variables best predict '{vc}'?"
+ 
+Random Forest (200 trees, 5-fold CV):
+- R² train={rf_res.get('r2_train')}, R² CV={rf_res.get('r2_cv_mean')} ± {rf_res.get('r2_cv_std')}
+- Top predictors by permutation importance: {dict(list(rf_res.get('permutation_importance', {{}}).items())[:4])}
+- Gini importance: {dict(list(rf_res.get('gini_importance', {{}}).items())[:4])}
+ 
+Write a plain-English walkthrough in EXACTLY this JSON array format — 3 steps:
+[
+  {{"step": 1, "title": "What we tested", "text": "..."}},
+  {{"step": 2, "title": "What we found", "text": "...name top predictors, explain what R² means in plain terms..."}},
+  {{"step": 3, "title": "What this means", "text": "...practical interpretation, caution about causation vs prediction..."}}
+]
+Return only valid JSON array."""
+ 
+    # ── test_correlation ──────────────────────────────────────────────────────
+    elif req.question_type == "test_correlation":
+        c1 = req.predictor_col or (num[0] if len(num) > 0 else None)
+        c2 = req.outcome_col   or (num[1] if len(num) > 1 else None)
+        if not c1 or not c2:
+            raise HTTPException(400, "Need two numeric columns for correlation")
+ 
+        sub = df[[c1, c2]].apply(pd.to_numeric, errors="coerce").dropna()
+        r_p, p_p = scipy_stats.pearsonr(sub[c1], sub[c2])
+        r_s, p_s = spearmanr(sub[c1], sub[c2])
+        reg = _linear_regression(sub[c1].values, sub[c2].values, c1, c2)
+ 
+        result["findings"]["pearson"]  = {"r": round(float(r_p), 4), "p": _sf(p_p)}
+        result["findings"]["spearman"] = {"rho": round(float(r_s), 4), "p": _sf(p_s)}
+        result["findings"]["regression"] = reg
+        result["analyses_run"].extend(["Pearson correlation", "Spearman correlation", "OLS regression"])
+ 
+        strength = "strong" if abs(r_p) > 0.5 else "moderate" if abs(r_p) > 0.3 else "weak"
+        direction = "positive" if r_p > 0 else "negative"
+ 
+        prompt = f"""A researcher asked: "Is there a relationship between '{c1}' and '{c2}'?"
+ 
+Pearson r={round(float(r_p),4)}, p={_sf(p_p)} — {strength} {direction} correlation
+Spearman ρ={round(float(r_s),4)}, p={_sf(p_s)}
+Regression: slope={reg.get('slope')}, R²={reg.get('r2')}, p={reg.get('p_value_slope')}
+N = {len(sub)}
+ 
+Write a plain-English walkthrough in EXACTLY this JSON array format — 3 steps:
+[
+  {{"step": 1, "title": "What we tested", "text": "..."}},
+  {{"step": 2, "title": "What we found", "text": "...direction, strength, significance in plain language..."}},
+  {{"step": 3, "title": "What this means", "text": "...practical meaning, warn about correlation ≠ causation..."}}
+]
+Return only valid JSON array."""
+ 
+    # ── full_explore ──────────────────────────────────────────────────────────
+    else:  # full_explore
+        if len(num) >= 2:
+            top_n = min(8, len(num))
+            corr  = _pearson_matrix(df, num[:top_n])
+            mat   = np.array(corr["pearson"])
+            np.fill_diagonal(mat, 0)
+            idx   = np.unravel_index(np.argmax(np.abs(mat)), mat.shape)
+            result["findings"]["strongest_correlation"] = {
+                "col_a": num[idx[0]], "col_b": num[idx[1]],
+                "r": round(float(mat[idx]), 4),
+                "p": corr["pvalues"][idx[0]][idx[1]],
+            }
+            result["analyses_run"].append("Correlation matrix")
+ 
+        if len(num) >= 2:
+            km = _kmeans_full(df, num[:6], 3)
+            result["findings"]["clustering"] = km
+            result["analyses_run"].append("K-Means clustering")
+ 
+        if cat and num:
+            anova_res = _anova(df, cat[0], num[0])
+            result["findings"]["anova"] = anova_res
+            result["analyses_run"].append(f"ANOVA: {num[0]} by {cat[0]}")
+ 
+        if len(num) >= 3:
+            rf = _rf_importance(df, num[:6])
+            result["findings"]["feature_importance"] = rf
+            result["analyses_run"].append("Random Forest importance")
+ 
+        sc = result["findings"].get("strongest_correlation", {})
+        km_sil = result["findings"].get("clustering", {}).get("silhouette_score")
+        an = result["findings"].get("anova", {})
+        rf_top = list(result["findings"].get("feature_importance", {}).get("permutation_importance", {}).keys())[:2]
+ 
+        prompt = f"""A researcher asked: "What's interesting in my data? Explore everything."
+ 
+Dataset: {meta['name']}, {len(df)} rows, {len(df.columns)} cols
+Strongest correlation: {sc.get('col_a')} vs {sc.get('col_b')}, r={sc.get('r')}, p={sc.get('p')}
+Clustering: 3 clusters, silhouette={km_sil}
+ANOVA: {an.get('value_column')} by {an.get('group_column')}, p={an.get('p_value')}, η²={an.get('eta_squared')}
+Top predictive features: {rf_top}
+ 
+Write a plain-English walkthrough in EXACTLY this JSON array format — 4 steps:
+[
+  {{"step": 1, "title": "Your data at a glance", "text": "...describe the dataset in plain terms..."}},
+  {{"step": 2, "title": "Most interesting relationship", "text": "...the strongest correlation in plain language..."}},
+  {{"step": 3, "title": "Natural groupings", "text": "...what the clusters suggest..."}},
+  {{"step": 4, "title": "Where to dig deeper", "text": "...3 specific next questions worth asking..."}}
+]
+Return only valid JSON array."""
+ 
+    # ── parse walkthrough ─────────────────────────────────────────────────────
+    raw_walk = await gemini(prompt, system=RESEARCH_SYSTEM)
+    try:
+        clean = raw_walk.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+        result["walkthrough"] = json.loads(clean)
+    except Exception:
+        result["walkthrough"] = [{"step": 1, "title": "Summary", "text": raw_walk}]
+ 
+    _log("Quick Explore Agent", req.question_type,
+         f"{req.dataset_id} → {len(result['analyses_run'])} analyses")
+    return result
