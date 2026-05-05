@@ -11,26 +11,6 @@ GEMINI_API_KEY=your_key uvicorn main:app --reload --port 8000
 
 Docs auto-generated at: `http://localhost:8000/docs`
 
----
-
-## What makes this different from every other tool
-
-| Feature | Nexus | Databricks | Tableau | AutoML | ChatGPT |
-|---|---|---|---|---|---|
-| Multi-CSV cohort builder (no duplication) | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Data-structure-aware model selection (LMM etc.) | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Adversarial peer reviewer | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Study design generation | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Causal inference (PSM, IPW, DiD) | ✅ | partial | ❌ | ❌ | ❌ |
-| Survival analysis (KM + Cox) | ✅ | manual | ❌ | ❌ | ❌ |
-| Sensitivity + replication analysis | ✅ | manual | ❌ | ❌ | ❌ |
-| SHAP explainability | ✅ | manual | ❌ | partial | ❌ |
-| Mediation analysis | ✅ | manual | ❌ | ❌ | ❌ |
-| Power planning (prospective) | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Lab workspaces + versioning | ✅ | ✅ | partial | ❌ | ❌ |
-| Publication-ready report | ✅ | ❌ | ❌ | ❌ | partial |
-
----
 
 ## Full API Reference
 
