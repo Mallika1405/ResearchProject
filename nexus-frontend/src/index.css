@@ -1,0 +1,213 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* ── Light theme ─────────────────────────────────────────────────── */
+    --background:        0 0% 98%;
+    --foreground:        220 20% 12%;
+
+    --card:              0 0% 100%;
+    --card-foreground:   220 20% 12%;
+
+    --popover:           0 0% 100%;
+    --popover-foreground: 220 20% 12%;
+
+    /* Indigo-blue primary — research / academic feel */
+    --primary:           243 75% 58%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary:         220 14% 96%;
+    --secondary-foreground: 220 20% 28%;
+
+    --muted:             220 14% 96%;
+    --muted-foreground:  220 10% 52%;
+
+    --accent:            243 75% 96%;
+    --accent-foreground: 243 75% 42%;
+
+    --destructive:       0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --success:           142 71% 45%;
+    --success-foreground: 0 0% 100%;
+
+    --warning:           38 92% 50%;
+    --warning-foreground: 0 0% 100%;
+
+    --info:              199 89% 48%;
+    --info-foreground:   0 0% 100%;
+
+    --border:            220 13% 91%;
+    --input:             220 13% 91%;
+    --ring:              243 75% 58%;
+
+    --radius:            0.5rem;
+
+    /* Sidebar */
+    --sidebar-background:         220 20% 12%;
+    --sidebar-foreground:         220 10% 82%;
+    --sidebar-primary:            243 75% 65%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent:             220 20% 18%;
+    --sidebar-accent-foreground:  220 10% 92%;
+    --sidebar-border:             220 20% 20%;
+    --sidebar-ring:               243 75% 58%;
+    --sidebar-muted:              220 10% 52%;
+  }
+
+  /* keep dark class a no-op (we're light only for now) */
+  .dark { --background: 0 0% 98%; }
+}
+
+@layer base {
+  * { @apply border-border; }
+
+  html, body, #root {
+    @apply bg-background text-foreground;
+    font-family: 'Inter', 'SF Pro Display', -apple-system, BlinkMacSystemFont,
+                 'Segoe UI', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* subtle dot-grid background */
+  body {
+    background-image: radial-gradient(
+      circle, hsl(243 75% 58% / 0.06) 1px, transparent 1px
+    );
+    background-size: 24px 24px;
+  }
+
+  ::selection {
+    background: hsl(243 75% 58% / 0.15);
+    color: hsl(var(--foreground));
+  }
+
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 99px; }
+  ::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground) / 0.4); }
+}
+
+@layer components {
+  /* ── Card surface ─────────────────────────────────────────────────── */
+  .nx-card {
+    @apply bg-white border border-border rounded-xl shadow-sm;
+  }
+
+  .nx-card-hover {
+    @apply nx-card transition-all duration-150 hover:shadow-md hover:border-primary/30 cursor-pointer;
+  }
+
+  /* ── Section label ────────────────────────────────────────────────── */
+  .nx-label {
+    @apply text-[11px] font-semibold uppercase tracking-widest text-muted-foreground;
+  }
+
+  /* ── Code / mono text ─────────────────────────────────────────────── */
+  .nx-mono {
+    font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+  }
+
+  /* ── Stat pill ────────────────────────────────────────────────────── */
+  .nx-stat {
+    @apply flex flex-col gap-0.5 rounded-lg bg-secondary px-3 py-2;
+  }
+
+  /* ── Sidebar nav item ─────────────────────────────────────────────── */
+  .nx-nav-item {
+    @apply flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm
+           text-sidebar-foreground/70 transition-colors duration-100
+           hover:bg-sidebar-accent hover:text-sidebar-accent-foreground
+           cursor-pointer select-none;
+  }
+
+  .nx-nav-item.active {
+    @apply bg-sidebar-accent text-sidebar-accent-foreground font-medium;
+  }
+
+  .nx-nav-item .nx-nav-icon {
+    @apply h-4 w-4 shrink-0;
+  }
+
+  /* ── Result block ─────────────────────────────────────────────────── */
+  .nx-result {
+    @apply nx-card p-4 space-y-3;
+  }
+
+  .nx-result-title {
+    @apply text-xs font-semibold text-foreground uppercase tracking-wide;
+  }
+
+  /* ── Badge variants ───────────────────────────────────────────────── */
+  .nx-badge-primary {
+    @apply inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium
+           bg-primary/10 text-primary;
+  }
+
+  .nx-badge-success {
+    @apply inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium
+           bg-green-50 text-green-700;
+  }
+
+  .nx-badge-warning {
+    @apply inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium
+           bg-amber-50 text-amber-700;
+  }
+
+  .nx-badge-danger {
+    @apply inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium
+           bg-red-50 text-red-600;
+  }
+
+  /* ── Input focus style ────────────────────────────────────────────── */
+  .nx-input {
+    @apply w-full rounded-lg border border-input bg-white px-3 py-2 text-sm
+           placeholder:text-muted-foreground
+           focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/60
+           transition-colors;
+  }
+
+  /* ── Section divider ──────────────────────────────────────────────── */
+  .nx-divider {
+    @apply border-t border-border;
+  }
+
+  /* ── Blink caret (keep subtle in light mode) ─────────────────────── */
+  .blink-caret::after {
+    content: '|';
+    animation: blink 1s step-end infinite;
+    color: hsl(var(--primary));
+    margin-left: 1px;
+  }
+
+  /* legacy compat */
+  .terminal-panel {
+    @apply nx-card;
+  }
+
+  .glow-text { color: hsl(var(--primary)); }
+  .glow-text-cyan { color: hsl(var(--info)); }
+  .scan-line::before { display: none; }
+  .pulse-dot { animation: pulse-dot 2s ease-in-out infinite; }
+}
+
+@keyframes blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.35; }
+}
+
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.animate-slide-up {
+  animation: slide-up 0.2s ease-out;
+}
